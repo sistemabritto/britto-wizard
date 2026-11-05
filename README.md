@@ -1,16 +1,4 @@
-<pre>
-  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
-▄█▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█▄   S  I  S  T  E  M  A
-██ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ██   ██████╗  ██████╗  ██╗ ████████╗ ████████╗  ██████╗ 
-██ █ ▄▀▀▀▀ █▀▀▀▄ █ ██   ██╔══██╗ ██╔══██╗ ██║ ╚══██╔══╝ ╚══██╔══╝ ██╔═══██╗
-██ █ ▀▄▄▄  █▄▄▄▀ █ ██   ██████╔╝ ██████╔╝ ██║    ██║       ██║    ██║   ██║
-██ █     █ █   █ █ ██   ██╔══██╗ ██╔══██╗ ██║    ██║       ██║    ██║   ██║
-██ █ ▀▄▄▄▀ █▄▄▄▀ █ ██   ██████╔╝ ██║  ██║ ██║    ██║       ██║    ╚██████╔╝
-▀██ ▀▄         ▄▀ ██▀   ╚═════╝  ╚═╝  ╚═╝ ╚═╝    ╚═╝       ╚═╝     ╚═════╝ 
- ▀██ ▀▄▄     ▄▄▀ ██▀ 
-   ▀██▄ ▀▀▄▀▀ ▄██▀      CRMs de nicho · WhatsApp · IA · tráfego
-      ▀▀▀▄▄▄▀▀▀      
-</pre>
+<p align="center"><img src="assets/logo-terminal.png" alt="Britto Wizard: escudo SB e SISTEMA BRITTO no terminal" width="760"></p>
 
 # Britto Wizard
 
@@ -23,7 +11,7 @@ Fork do [SetupOrion](https://github.com/oriondesign2015/SetupOrion) (MIT) da **O
 sudo -i
 bash <(curl -sSL https://raw.githubusercontent.com/sistemabritto/britto-wizard/main/britto)
 ```
-O wizard atualiza o servidor e instala as dependências, Docker e Swarm. Depois segue direto pelos passos, sem menu:
+O wizard abre com a logo do Sistema Britto, atualiza o servidor e instala as dependências, Docker e Swarm. Depois segue direto pelos passos, sem menu:
 
 1. **Traefik + Portainer**, com HTTPS automático e admin criado sozinho.
 2. **Qual CRM:**
@@ -57,6 +45,16 @@ Depois: `britto-wizard status | template | fechar | mcp | docuseal | resumo`. Pa
 - **Template jurídico:** aplicado num CRM real dentro de uma transação desfeita, sem deixar registro.
 - **Skill do site:** gerado, testado no Chrome (código G/Meta, contagem de cliques) e publicado em repositório privado de exemplo.
 - **Ativação do Evolution Go:** numa instalação nova, ative uma vez em `https://whatsapp.seudominio/manager`. Antes disso a API responde `LICENSE_REQUIRED` (guia 02).
+
+## Teste automático
+O workflow [`teste-instalacao`](.github/workflows/teste-instalacao.yml) roda a instalação **completa** do evo-jud-crm numa VM Ubuntu 24.04 descartável do GitHub. Ele usa o comando oficial e [respostas pré-definidas](tests/respostas-completo.txt). Depois, [`tests/verificar.sh`](tests/verificar.sh) confere:
+- os serviços;
+- as rotas HTTPS;
+- o cadastro público fechado;
+- o template aplicado;
+- as permissões dos arquivos.
+
+Para rodar: aba **Actions › teste-instalacao › Run workflow**.
 
 ## O que vem no evo-jud-crm
 | Componente | Repositório / imagem |
