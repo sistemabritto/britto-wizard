@@ -35,4 +35,5 @@ jobs:
         run: |
           sudo docker service ls || true
           for s in $(sudo docker service ls --format '{{.Name}}'); do echo "== $s"; sudo docker service ps "$s" --no-trunc --format '{{.CurrentState}} {{.Error}}' | head -3; done
+          for s in evocrm_evocrm_crm evocrm_evocrm_auth evocrm_evocrm_crm_sidekiq; do echo "== log $s"; sudo docker service logs --tail 80 --no-task-ids "$s" 2>&1 | grep -viE 'password|secret|token' | cut -c1-300; done
           sudo tail -60 /opt/britto/wizard.log | sed -E 's/(senha|password|token|secret)[^ ]*/\1=***/Ig' || true

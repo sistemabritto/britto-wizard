@@ -288,6 +288,8 @@ instalar_evo_jud() {
   deploy_portainer evocrm "$D/stacks/evocrm.yaml" || morrer "falha no deploy do CRM"
   esperar "API do CRM em https://$(env_get HOST_API_CRM) (migrações levam 3 a 8 min)" 1200 \
     curl -fsSk -o /dev/null "https://$(env_get HOST_API_CRM)/health" || morrer "a API do CRM não respondeu (veja: docker service logs evocrm_evocrm_crm)"
+  esperar "serviço do CRM estável (evocrm_crm 1/1)" 900 bash -c '[ "$(docker service ls -f name=evocrm_evocrm_crm --format "{{.Name}} {{.Replicas}}" | awk "\$1==\"evocrm_evocrm_crm\"{print \$2}")" = 1/1 ] && docker exec $(docker ps -q -f name=^evocrm_evocrm_crm\\. | head -1) true' \
+    || morrer "o serviço evocrm_crm não estabilizou (veja: docker service logs evocrm_evocrm_crm)"
   { echo "CRM:      https://$(env_get HOST_CRM)"; echo "API:      https://$(env_get HOST_API_CRM)";
     echo "WhatsApp: https://$(env_get HOST_WHATSAPP)  (provedor Evolution Go; API key = EVOGO_GLOBAL_API_KEY em $ENVF)"
     echo "  ATIVE o Evolution Go uma vez em https://$(env_get HOST_WHATSAPP)/manager (sem isso responde LICENSE_REQUIRED)"; echo; } >> "$RESUMO"
@@ -305,7 +307,8 @@ primeira_conta() {
   [ "$DRY" = 1 ] && { info "(dry-run) criação da 1ª conta e template"; return; }
   local n=0 nome email senha cod
   contar_usuarios() { printf 'puts User.count\n' > "$BASE/.u.rb"; rails_runner "$BASE/.u.rb" | tail -1; rm -f "$BASE/.u.rb"; }
-  n=$(contar_usuarios)
+  local t; for t in 1 2 3 4 5 6; do n=$(contar_usuarios); [[ "$n" =~ ^[0-9]+$ ]] && break; sleep 20; done
+  [[ "$n" =~ ^[0-9]+$ ]] || morrer "não consegui consultar o CRM (rails runner); veja: docker service logs evocrm_evocrm_crm"
   if [ "${n:-0}" -lt 1 ] 2>/dev/null && confirmar "Criar a conta do administrador agora, pelo wizard?"; then
     perguntar nome "Nome do administrador" ""
     perguntar email "E-mail do administrador (login)" ""
