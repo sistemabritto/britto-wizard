@@ -6,6 +6,7 @@ Uso:
   portainer.py wait   <host>                            espera o Portainer responder (até 10 min)
   portainer.py deploy <nome> <arquivo.yaml> <env-file>  renderiza ${VAR} com o .env e cria/atualiza a stack (editável no Portainer)
   portainer.py exists <nome>                            sai 0 se a stack existe
+  portainer.py ping                                     login + endpoint + Swarm visíveis
 
 Credenciais lidas de /root/dados_vps/dados_portainer (formato do SetupOrion, compatível com ele).
 """
@@ -24,10 +25,12 @@ CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE  # certificado do Let's Encrypt pode ainda não ter saído na 1ª execução
 
 
-def req(base, method, path, body=None, token=None, timeout=120):
+def req(base, method, path, body=None, token=None, timeout=120, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(base + path, method=method, data=data)
     r.add_header('Content-Type', 'application/json')
+    for k, v in (headers or {}).items():
+        r.add_header(k, v)
     if token:
         r.add_header('Authorization', 'Bearer ' + token)
     with urllib.request.urlopen(r, timeout=timeout, context=CTX) as resp:
@@ -79,14 +82,22 @@ def render(path, env_file):
 
 
 def cmd_init(host, user, pw):
+    # Portainer 2.3x+ exige o setup token impresso no log da 1ª subida (X-Setup-Token);
+    # o wizard lê o token do log e passa em PORTAINER_SETUP_TOKEN. Versões antigas ignoram o cabeçalho.
     base = 'https://' + host
-    try:
-        req(base, 'POST', '/api/users/admin/init', {'Username': user, 'Password': pw})
-        print('admin do Portainer criado')
-    except urllib.error.HTTPError as e:
-        if e.code != 409:
-            raise
-        print('admin do Portainer já existia')
+    headers = {'X-Setup-Token': os.environ['PORTAINER_SETUP_TOKEN']} if os.environ.get('PORTAINER_SETUP_TOKEN') else {}
+    for tentativa in range(6):
+        try:
+            req(base, 'POST', '/api/users/admin/init', {'Username': user, 'Password': pw}, headers=headers)
+            print('admin do Portainer criado')
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                print('admin do Portainer já existia')
+                break
+            if tentativa == 5:
+                raise
+            time.sleep(10)
     os.makedirs('/root/dados_vps', mode=0o700, exist_ok=True)
     fd = os.open(DADOS, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.write(fd, f'[ PORTAINER ]\nDominio do portainer: {host}\n\nUsuario: {user}\n\nSenha: {pw}\n'.encode())
@@ -137,6 +148,9 @@ if __name__ == '__main__':
             cmd_wait(a[1])
         elif a[:1] == ['deploy'] and len(a) == 4:
             cmd_deploy(*a[1:])
+        elif a[:1] == ['ping']:
+            login()
+            print('Portainer: login, endpoint e Swarm ok')
         elif a[:1] == ['exists'] and len(a) == 2:
             cmd_exists(a[1])
         elif a[:1] == ['render'] and len(a) == 3:

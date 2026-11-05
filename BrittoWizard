@@ -214,7 +214,9 @@ passo_portainer() {
   ( umask 077; portainer render "$WIZ_DIR/infra/traefik-portainer.yaml" "$ENVF" > "$f" ) || morrer "falha ao montar a stack do Traefik"
   executar "deploy Traefik + Portainer" docker stack deploy --prune --resolve-image always -c "$f" traefik; rm -f "$f"
   esperar "Portainer com HTTPS em https://$host (o certificado pode levar 1 a 3 min)" 600 portainer wait "$host" || morrer "Portainer não respondeu."
-  executar "admin do Portainer" portainer init "$host" "$user" "$pass"
+  local setup_token; setup_token=$(docker service logs traefik_portainer 2>/dev/null | grep -oE 'setup_token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2)
+  PORTAINER_SETUP_TOKEN="$setup_token" executar "admin do Portainer" portainer init "$host" "$user" "$pass" || morrer "não consegui criar o admin do Portainer"
+  esperar "Portainer conectado ao Swarm" 180 portainer ping || morrer "o Portainer não enxergou o Swarm"
   { echo "Portainer: https://$host"; echo "  usuário: $user"; echo "  senha:   $pass"; echo; } >> "$RESUMO"; chmod 600 "$RESUMO"
   ok "Credenciais do Portainer guardadas em $RESUMO"
 }
@@ -271,21 +273,21 @@ instalar_evo_jud() {
   cp "$D/processor-patch/sitecustomize.py" "$BASE/crm/evo-jud-crm/processor-patch/" && ok "patch de áudio do processor"
   local s
   for s in pgvector postgres evocrm evolution-go; do volumes_de "$D/stacks/$s.yaml"; done
-  stack_existe pgvector || deploy_portainer pgvector "$D/stacks/pgvector.yaml"
-  stack_existe postgres || deploy_portainer postgres "$D/stacks/postgres.yaml"
-  esperar "banco do CRM (pgvector)" 300 bash -c 'docker exec $(docker ps -q -f name=^pgvector_pgvector\\. | head -1) pg_isready -U postgres'
-  esperar "banco do WhatsApp (postgres)" 300 bash -c 'docker exec $(docker ps -q -f name=^postgres_postgres\\. | head -1) pg_isready -U postgres'
+  stack_existe pgvector || deploy_portainer pgvector "$D/stacks/pgvector.yaml" || morrer "falha no deploy do pgvector"
+  stack_existe postgres || deploy_portainer postgres "$D/stacks/postgres.yaml" || morrer "falha no deploy do postgres"
+  esperar "banco do CRM (pgvector)" 600 bash -c 'docker exec $(docker ps -q -f name=^pgvector_pgvector\\. | head -1) pg_isready -U postgres' || morrer "o pgvector não subiu"
+  esperar "banco do WhatsApp (postgres)" 600 bash -c 'docker exec $(docker ps -q -f name=^postgres_postgres\\. | head -1) pg_isready -U postgres' || morrer "o postgres não subiu"
   if [ "$DRY" != 1 ]; then
     criar_db pgvector_pgvector evocrm; criar_db pgvector_pgvector evo_campaign
     criar_db postgres_postgres evolution_go_auth; criar_db postgres_postgres evolution_go_users
   fi
-  deploy_portainer evolution_go "$D/stacks/evolution-go.yaml"
+  deploy_portainer evolution_go "$D/stacks/evolution-go.yaml" || morrer "falha no deploy do Evolution Go"
   if [ "${BRITTO_TESTE_LEVE:-0}" = 1 ]; then # máquina de teste pequena: infra, bancos e WhatsApp, sem o CRM (~9 GB de imagens)
     aviso "BRITTO_TESTE_LEVE=1: pulando a stack evocrm, a 1ª conta e o template."; return
   fi
-  deploy_portainer evocrm "$D/stacks/evocrm.yaml"
+  deploy_portainer evocrm "$D/stacks/evocrm.yaml" || morrer "falha no deploy do CRM"
   esperar "API do CRM em https://$(env_get HOST_API_CRM) (migrações levam 3 a 8 min)" 1200 \
-    curl -fsS -o /dev/null "https://$(env_get HOST_API_CRM)/health"
+    curl -fsS -o /dev/null "https://$(env_get HOST_API_CRM)/health" || morrer "a API do CRM não respondeu (veja: docker service logs evocrm_evocrm_crm)"
   { echo "CRM:      https://$(env_get HOST_CRM)"; echo "API:      https://$(env_get HOST_API_CRM)";
     echo "WhatsApp: https://$(env_get HOST_WHATSAPP)  (provedor Evolution Go; API key = EVOGO_GLOBAL_API_KEY em $ENVF)"; echo; } >> "$RESUMO"
   primeira_conta
@@ -308,8 +310,18 @@ primeira_conta() {
     [ "${n:-0}" -ge 1 ] 2>/dev/null || aviso "Ainda não encontrei nenhuma conta no CRM."
   done
   ok "conta criada"
+  configurar_whatsapp
   aplicar_template
   fechar_cadastro
+}
+
+configurar_whatsapp() { # preenche Configurações › Admin › Evolution Go (URL + chave) para o canal sair pronto
+  printf '%s\n' "GlobalConfig.set('EVOLUTION_GO_API_URL', ENV.fetch('B_URL'))" \
+    "GlobalConfig.set('EVOLUTION_GO_ADMIN_SECRET', ENV.fetch('B_KEY'))" \
+    "GlobalConfig.clear_cache if GlobalConfig.respond_to?(:clear_cache)" "puts 'evolution_go ok'" > "$BASE/.w.rb"
+  rails_runner "$BASE/.w.rb" "B_URL=https://$(env_get HOST_WHATSAPP)" "B_KEY=$(env_get EVOGO_GLOBAL_API_KEY)" | grep -q 'evolution_go ok' \
+    && ok "WhatsApp (Evolution Go) configurado no CRM" || aviso "configure o Evolution Go em Configurações › Admin (guia 02)"
+  rm -f "$BASE/.w.rb"
 }
 
 aplicar_template() {
