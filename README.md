@@ -44,6 +44,17 @@ Depois: `britto-wizard status | template | fechar | mcp | docuseal | resumo`. Pa
 
 **VPS:** 4 vCPU, 8 GB de RAM e 80 GB de disco. Funciona em CPU **sem AVX2**, como os Xeon E3 v2 da Database Mart, porque as versões estão fixadas por digest (`crm/*/images.env`).
 
+## Testes
+- **Instalação real** (sem dry-run), em Ubuntu 24.04 limpo com Docker Swarm, pelo comando `curl` oficial:
+  - atualização do sistema, Docker, Swarm, Traefik e Portainer (admin criado com o setup token);
+  - pgvector e Postgres publicados pelo Portainer, com os 4 bancos;
+  - Evolution Go no ar via Traefik.
+
+  Rodou com `BRITTO_TESTE_LEVE=1`, sem a stack do CRM (~9 GB de imagens). A configuração do CRM é a mesma que roda em produção.
+- **Template jurídico:** aplicado num CRM real dentro de uma transação desfeita, sem deixar registro.
+- **Skill do site:** gerado, testado no Chrome (código G/Meta, contagem de cliques) e publicado em repositório privado de exemplo.
+- **Ativação do Evolution Go:** numa instalação nova, ative uma vez em `https://whatsapp.seudominio/manager`. Antes disso a API responde `LICENSE_REQUIRED` (guia 02).
+
 ## O que vem no evo-jud-crm
 | Componente | Repositório / imagem |
 |---|---|

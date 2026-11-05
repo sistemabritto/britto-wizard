@@ -2,6 +2,7 @@
 
 O WhatsApp entra pelo **evogo-jud**, fork do Evolution Go. Ele é **não oficial**: lê o QR Code do WhatsApp Business do celular, sem precisar da API oficial do Meta. Use um chip para **aquisição** (comercial) e, se quiser, outro para **suporte**.
 
+0. **Ativar o Evolution Go (uma vez por servidor):** instalação nova responde `LICENSE_REQUIRED` até ser ativada. Abra `https://whatsapp.seudominio/manager`, entre com a `EVOGO_GLOBAL_API_KEY` do `/opt/britto/.env` e siga a ativação (licença do projeto Evolution Go, feita pelo próprio manager). Sem isso o CRM não consegue criar a instância nem gerar o QR Code.
 1. O wizard já deixa o provedor pronto em **Configurações › Admin › Canais** (seção Evolution Go): URL `https://whatsapp.seudominio` e a chave `EVOGO_GLOBAL_API_KEY` do `/opt/britto/.env`. Se instalou de outro jeito, preencha esses dois campos aí.
 2. No CRM: **Canais › Novo canal › WhatsApp › provedor Evolution Go**.
 3. Dê um nome ao canal (ex.: `whatsapp-comercial`) e marque ignorar grupos/status para não misturar contatos.

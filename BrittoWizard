@@ -289,7 +289,8 @@ instalar_evo_jud() {
   esperar "API do CRM em https://$(env_get HOST_API_CRM) (migrações levam 3 a 8 min)" 1200 \
     curl -fsS -o /dev/null "https://$(env_get HOST_API_CRM)/health" || morrer "a API do CRM não respondeu (veja: docker service logs evocrm_evocrm_crm)"
   { echo "CRM:      https://$(env_get HOST_CRM)"; echo "API:      https://$(env_get HOST_API_CRM)";
-    echo "WhatsApp: https://$(env_get HOST_WHATSAPP)  (provedor Evolution Go; API key = EVOGO_GLOBAL_API_KEY em $ENVF)"; echo; } >> "$RESUMO"
+    echo "WhatsApp: https://$(env_get HOST_WHATSAPP)  (provedor Evolution Go; API key = EVOGO_GLOBAL_API_KEY em $ENVF)"
+    echo "  ATIVE o Evolution Go uma vez em https://$(env_get HOST_WHATSAPP)/manager (sem isso responde LICENSE_REQUIRED)"; echo; } >> "$RESUMO"
   primeira_conta
 }
 
