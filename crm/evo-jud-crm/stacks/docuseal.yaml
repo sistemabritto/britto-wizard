@@ -1,0 +1,27 @@
+# Assinatura eletrônica self-hosted (DocuSeal). Opcional; o webhook submission.completed alimenta o funil (contrato assinado).
+version: "3.8"
+services:
+  app:
+    image: ${IMG_DOCUSEAL}
+    environment:
+      - HOST=${HOST_DOCUSEAL}
+      - FORCE_SSL=true
+      - SECRET_KEY_BASE=${DOCUSEAL_SECRET_KEY_BASE}
+      - TZ=America/Sao_Paulo
+    volumes: [docuseal_data:/data]
+    networks: [network_public]
+    deploy:
+      replicas: 1
+      resources: {limits: {memory: 768M}}
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - traefik.http.routers.docuseal.rule=Host(`${HOST_DOCUSEAL}`)
+        - traefik.http.routers.docuseal.entrypoints=websecure
+        - traefik.http.routers.docuseal.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.docuseal.service=docuseal
+        - traefik.http.services.docuseal.loadbalancer.server.port=3000
+volumes:
+  docuseal_data: {external: true, name: docuseal_data}
+networks:
+  network_public: {external: true, name: network_public}

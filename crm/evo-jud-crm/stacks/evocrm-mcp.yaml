@@ -1,0 +1,41 @@
+# Conector MCP do CRM (evocrm-mcp) com login OAuth por senha: Claude (web/desktop/Code), ChatGPT/Codex e Grok.
+# Segredos em docker secrets criados pelo wizard (passo MCP). Módulos opcionais desligados por padrão.
+version: "3.8"
+services:
+  mcp:
+    image: ${IMG_MCP}
+    command: ["node", "--require", "/app/compat.cjs", "oauth-server.mjs"]
+    environment:
+      - EVOCRM_BASE_URL=http://evocrm_evocrm_gateway:3030
+      - EVOCRM_API_TOKEN_FILE=/run/secrets/britto_mcp_crm_token
+      - CONNECTOR_PASSWORD_SCRYPT_FILE=/run/secrets/britto_mcp_pass_scrypt
+      - PUBLIC_URL=https://${HOST_MCP}
+      - STATE_FILE=/data/state.json
+      - MCP_ORG_NAME=${ORG_NAME}
+      - MCP_DISABLED_TOOLS=message_send,template_send,conversation_start_with_template
+      - TRACKING_ENABLED=true
+      - TZ=America/Sao_Paulo
+    secrets: [britto_mcp_crm_token, britto_mcp_pass_scrypt]
+    volumes: [evocrm_mcp_data:/data]
+    networks: [network_public]
+    deploy:
+      replicas: 1
+      resources: {limits: {memory: 384M}}
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - traefik.http.routers.evocrm_mcp.rule=Host(`${HOST_MCP}`)
+        - traefik.http.routers.evocrm_mcp.entrypoints=websecure
+        - traefik.http.routers.evocrm_mcp.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.evocrm_mcp.middlewares=evocrm_mcp_rl
+        - traefik.http.middlewares.evocrm_mcp_rl.ratelimit.average=20
+        - traefik.http.middlewares.evocrm_mcp_rl.ratelimit.burst=40
+        - traefik.http.routers.evocrm_mcp.service=evocrm_mcp
+        - traefik.http.services.evocrm_mcp.loadbalancer.server.port=3000
+secrets:
+  britto_mcp_crm_token: {external: true}
+  britto_mcp_pass_scrypt: {external: true}
+volumes:
+  evocrm_mcp_data: {external: true, name: evocrm_mcp_data}
+networks:
+  network_public: {external: true, name: network_public}

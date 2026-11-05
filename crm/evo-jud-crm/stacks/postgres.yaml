@@ -1,0 +1,18 @@
+# Banco do Evolution Go / evogo-jud (bancos evolution_go_auth e evolution_go_users, criados pelo wizard).
+version: "3.8"
+services:
+  postgres:
+    image: ${IMG_POSTGRES}
+    command: [postgres, -c, max_connections=100, -c, timezone=America/Sao_Paulo]
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_EVOGO_PASSWORD}
+      - TZ=America/Sao_Paulo
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [network_public]
+    deploy:
+      placement: {constraints: [node.role == manager]}
+      resources: {limits: {cpus: "0.5", memory: 512M}}
+volumes:
+  postgres_data: {external: true, name: postgres_data}
+networks:
+  network_public: {external: true, name: network_public}

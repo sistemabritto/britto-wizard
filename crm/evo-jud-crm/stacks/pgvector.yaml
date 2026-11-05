@@ -1,0 +1,18 @@
+# Banco do evo-jud-crm (bancos evocrm e evo_campaign, criados pelo wizard).
+version: "3.8"
+services:
+  pgvector:
+    image: ${IMG_PGVECTOR}
+    command: [postgres, -c, max_connections=500, -c, shared_buffers=512MB, -c, timezone=America/Sao_Paulo]
+    environment:
+      - POSTGRES_PASSWORD=${PGVECTOR_PASSWORD}
+      - TZ=America/Sao_Paulo
+    volumes: [pgvector:/var/lib/postgresql/data]
+    networks: [network_public]
+    deploy:
+      placement: {constraints: [node.role == manager]}
+      resources: {limits: {cpus: "1", memory: 1536M}}
+volumes:
+  pgvector: {external: true, name: pgvector}
+networks:
+  network_public: {external: true, name: network_public}

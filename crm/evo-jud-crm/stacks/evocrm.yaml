@@ -1,0 +1,526 @@
+# evo-jud-crm: stack principal (gerada da produção de referência e sanitizada).
+# Variáveis vêm do .env do britto-wizard (/opt/britto/.env). Deploy pelo wizard via Portainer.
+# SIGNUP_ALLOW_RANGE: 0.0.0.0/0 libera o cadastro da 1ª conta; o wizard troca para 255.255.255.255/32 depois.
+version: '3.8'
+services:
+  evocrm_gateway:
+    image: ${IMG_GATEWAY}
+    networks:
+    - network_public
+    environment:
+    - AUTH_UPSTREAM=evocrm_auth:3001
+    - CRM_UPSTREAM=evocrm_crm:3000
+    - CORE_UPSTREAM=evocrm_core:5555
+    - PROCESSOR_UPSTREAM=evocrm_processor:8000
+    - BOT_RUNTIME_UPSTREAM=evocrm_bot_runtime:8080
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+      labels:
+      - traefik.enable=1
+      - traefik.docker.network=network_public
+      - traefik.http.routers.evocrm_gateway.rule=Host(`${HOST_API_CRM}`)
+      - traefik.http.middlewares.evocrm_deny_signup.ipallowlist.sourcerange=${SIGNUP_ALLOW_RANGE}
+      - traefik.http.routers.evocrm_deny_signup.rule=(Host(`${HOST_API_CRM}`) || Host(`${HOST_CRM}`)) && (PathRegexp(`^/+api/+v1/+auth/+register`) || (Method(`POST`) && PathRegexp(`^/+auth/*([.][^/]*)?$$`)))
+      - traefik.http.routers.evocrm_deny_signup.priority=10000
+      - traefik.http.routers.evocrm_deny_signup.entrypoints=websecure
+      - traefik.http.routers.evocrm_deny_signup.tls.certresolver=letsencryptresolver
+      - traefik.http.routers.evocrm_deny_signup.middlewares=evocrm_deny_signup
+      - traefik.http.routers.evocrm_deny_signup.service=evocrm_gateway
+      - traefik.http.routers.evocrm_gateway.entrypoints=websecure
+      - traefik.http.routers.evocrm_gateway.priority=1
+      - traefik.http.routers.evocrm_gateway.tls.certresolver=letsencryptresolver
+      - traefik.http.routers.evocrm_gateway.service=evocrm_gateway
+      - traefik.http.services.evocrm_gateway.loadbalancer.server.port=3030
+      - traefik.http.services.evocrm_gateway.loadbalancer.passHostHeader=true
+  evocrm_auth:
+    image: ${IMG_AUTH}
+    command: bash -c "bundle exec rails db:migrate 2>&1 || echo 'Migration had errors, continuing...'; bundle exec rails s -p 3001 -b 0.0.0.0"
+    networks:
+    - network_public
+    environment:
+    - ENABLE_ACCOUNT_SIGNUP=${ENABLE_ACCOUNT_SIGNUP}
+    - RAILS_ENV=production
+    - RAILS_MAX_THREADS=5
+    - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    - EVOAI_CRM_API_TOKEN=${EVOAI_CRM_API_TOKEN}
+    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    - POSTGRES_HOST=pgvector
+    - POSTGRES_PORT=5432
+    - POSTGRES_USERNAME=postgres
+    - POSTGRES_PASSWORD=${PGVECTOR_PASSWORD}
+    - POSTGRES_DATABASE=evocrm
+    - POSTGRES_SSLMODE=disable
+    - REDIS_URL=redis://evocrm_redis:6379/1
+    - FRONTEND_URL=https://${HOST_CRM}
+    - BACKEND_URL=https://${HOST_API_CRM}
+    - CORS_ORIGINS=https://${HOST_CRM},https://${HOST_API_CRM}
+    - SMTP_DOMAIN=${SMTP_DOMAIN}
+    - MAILER_SENDER_EMAIL=${MAILER_SENDER_EMAIL}
+    - SMTP_USERNAME=${SMTP_USERNAME}
+    - SMTP_PASSWORD=${SMTP_PASSWORD}
+    - SMTP_ADDRESS=${SMTP_ADDRESS}
+    - SMTP_PORT=${SMTP_PORT}
+    - SMTP_AUTHENTICATION=plain
+    - SMTP_ENABLE_STARTTLS_AUTO=true
+    - DOORKEEPER_JWT_SECRET_KEY=${DOORKEEPER_JWT_SECRET_KEY}
+    - DOORKEEPER_JWT_ALGORITHM=hs256
+    - DOORKEEPER_JWT_ISS=evo-auth-service
+    - MFA_ISSUER=${ORG_NAME}
+    - SIDEKIQ_CONCURRENCY=10
+    - OAUTH_TOKEN_EXPIRES_IN=28800
+    - ACTIVE_STORAGE_SERVICE=local
+    - ACTIVE_STORAGE_URL=https://${HOST_API_CRM}
+    volumes:
+    - evocrm_auth_storage:/app/storage
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_auth_sidekiq:
+    image: ${IMG_AUTH}
+    command:
+    - bundle
+    - exec
+    - sidekiq
+    - -C
+    - config/sidekiq.yml
+    networks:
+    - network_public
+    environment:
+    - RAILS_ENV=production
+    - RUN_MIGRATIONS=false
+    - SERVICE_ROLE=sidekiq
+    - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    - EVOAI_CRM_API_TOKEN=${EVOAI_CRM_API_TOKEN}
+    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    - POSTGRES_HOST=pgvector
+    - POSTGRES_PORT=5432
+    - POSTGRES_USERNAME=postgres
+    - POSTGRES_PASSWORD=${PGVECTOR_PASSWORD}
+    - POSTGRES_DATABASE=evocrm
+    - POSTGRES_SSLMODE=disable
+    - REDIS_URL=redis://evocrm_redis:6379/1
+    - FRONTEND_URL=https://${HOST_CRM}
+    - BACKEND_URL=https://${HOST_API_CRM}
+    - CORS_ORIGINS=https://${HOST_CRM},https://${HOST_API_CRM}
+    - SMTP_DOMAIN=${SMTP_DOMAIN}
+    - MAILER_SENDER_EMAIL=${MAILER_SENDER_EMAIL}
+    - SMTP_USERNAME=${SMTP_USERNAME}
+    - SMTP_PASSWORD=${SMTP_PASSWORD}
+    - SMTP_ADDRESS=${SMTP_ADDRESS}
+    - SMTP_PORT=${SMTP_PORT}
+    - SMTP_AUTHENTICATION=plain
+    - SMTP_ENABLE_STARTTLS_AUTO=true
+    - DOORKEEPER_JWT_SECRET_KEY=${DOORKEEPER_JWT_SECRET_KEY}
+    - DOORKEEPER_JWT_ALGORITHM=hs256
+    - DOORKEEPER_JWT_ISS=evo-auth-service
+    - MFA_ISSUER=${ORG_NAME}
+    - SIDEKIQ_CONCURRENCY=10
+    - OAUTH_TOKEN_EXPIRES_IN=28800
+    - ACTIVE_STORAGE_SERVICE=local
+    - ACTIVE_STORAGE_URL=https://${HOST_API_CRM}
+    volumes:
+    - evocrm_auth_storage:/app/storage
+    healthcheck:
+      disable: true
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_crm:
+    image: ${IMG_CRM}
+    command: sh -c "until wget -qO- http://evocrm_auth:3001/health >/dev/null 2>&1; do echo 'Waiting for auth...'; sleep 5; done; bundle exec rails db:migrate 2>&1 || echo 'Migration had errors, continuing...'; bundle exec rails s -p 3000 -b 0.0.0.0"
+    networks:
+    - network_public
+    environment:
+    - RAILS_ENV=production
+    - RAILS_SERVE_STATIC_FILES=true
+    - RAILS_LOG_TO_STDOUT=true
+    - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    - EVOAI_CRM_API_TOKEN=${EVOAI_CRM_API_TOKEN}
+    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    - POSTGRES_HOST=pgvector
+    - POSTGRES_PORT=5432
+    - POSTGRES_USERNAME=postgres
+    - POSTGRES_PASSWORD=${PGVECTOR_PASSWORD}
+    - POSTGRES_DATABASE=evocrm
+    - POSTGRES_SSLMODE=disable
+    - REDIS_URL=redis://evocrm_redis:6379/2
+    - EVO_AUTH_SERVICE_URL=http://evocrm_auth:3001
+    - EVO_AI_CORE_SERVICE_URL=http://evocrm_core:5555
+    - EVO_FLOW_ENABLED=true
+    - EVO_FLOW_API_URL=http://evocrm_evoflow:3334/api/v1
+    - AUTH_APIKEY_INTEGRATION_LOCAL=${EVOFLOW_INTEGRATION_KEY}
+    - EVO_FLOW_ALLOW_INSECURE=true
+    - BACKEND_URL=https://${HOST_API_CRM}
+    - FRONTEND_URL=https://${HOST_CRM}
+    - CORS_ORIGINS=https://${HOST_CRM},https://${HOST_API_CRM}
+    - DISABLE_TELEMETRY=true
+    - LOG_LEVEL=info
+    - ENABLE_ACCOUNT_SIGNUP=${ENABLE_ACCOUNT_SIGNUP}
+    - ENABLE_PUSH_RELAY_SERVER=true
+    - ENABLE_INBOX_EVENTS=true
+    - BOT_RUNTIME_URL=http://evocrm_bot_runtime:8080
+    - BOT_RUNTIME_SECRET=${BOT_RUNTIME_SECRET}
+    - BOT_RUNTIME_POSTBACK_BASE_URL=http://evocrm_crm:3000
+    - ACTIVE_STORAGE_SERVICE=local
+    - ACTIVE_STORAGE_URL=https://${HOST_API_CRM}
+    - EVO_AI_ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    volumes:
+    - evocrm_storage:/app/storage
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+      labels:
+      - traefik.enable
+      - traefik.docker.network
+  evocrm_crm_sidekiq:
+    image: ${IMG_CRM}
+    command:
+    - bundle
+    - exec
+    - sidekiq
+    - -C
+    - config/sidekiq.yml
+    networks:
+    - network_public
+    environment:
+    - RAILS_ENV=production
+    - RUN_MIGRATIONS=false
+    - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    - EVOAI_CRM_API_TOKEN=${EVOAI_CRM_API_TOKEN}
+    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    - POSTGRES_HOST=pgvector
+    - POSTGRES_PORT=5432
+    - POSTGRES_USERNAME=postgres
+    - POSTGRES_PASSWORD=${PGVECTOR_PASSWORD}
+    - POSTGRES_DATABASE=evocrm
+    - POSTGRES_SSLMODE=disable
+    - REDIS_URL=redis://evocrm_redis:6379/2
+    - EVO_AUTH_SERVICE_URL=http://evocrm_auth:3001
+    - EVO_AI_CORE_SERVICE_URL=http://evocrm_core:5555
+    - EVO_FLOW_ENABLED=true
+    - EVO_FLOW_API_URL=http://evocrm_evoflow:3334/api/v1
+    - AUTH_APIKEY_INTEGRATION_LOCAL=${EVOFLOW_INTEGRATION_KEY}
+    - EVO_FLOW_ALLOW_INSECURE=true
+    - BACKEND_URL=https://${HOST_API_CRM}
+    - FRONTEND_URL=https://${HOST_CRM}
+    - CORS_ORIGINS=https://${HOST_CRM},https://${HOST_API_CRM}
+    - BOT_RUNTIME_URL=http://evocrm_bot_runtime:8080
+    - BOT_RUNTIME_SECRET=${BOT_RUNTIME_SECRET}
+    - BOT_RUNTIME_POSTBACK_BASE_URL=http://evocrm_crm:3000
+    - ACTIVE_STORAGE_SERVICE=local
+    - ACTIVE_STORAGE_URL=https://${HOST_API_CRM}
+    - EVO_AI_ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    volumes:
+    - evocrm_storage:/app/storage
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_core:
+    image: ${IMG_CORE}
+    networks:
+    - network_public
+    environment:
+    - DB_HOST=pgvector
+    - DB_PORT=5432
+    - DB_USER=postgres
+    - DB_PASSWORD=${PGVECTOR_PASSWORD}
+    - DB_NAME=evocrm
+    - DB_SSLMODE=disable
+    - DB_MAX_IDLE_CONNS=10
+    - DB_MAX_OPEN_CONNS=100
+    - DB_CONN_MAX_LIFETIME=1h
+    - DB_CONN_MAX_IDLE_TIME=30m
+    - PORT=5555
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    - JWT_ALGORITHM=HS256
+    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    - EVOLUTION_BASE_URL=http://evocrm_crm:3000
+    - EVO_AUTH_BASE_URL=http://evocrm_auth:3001
+    - AI_PROCESSOR_URL=http://evocrm_processor:8000
+    - AI_PROCESSOR_VERSION=v1
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_processor:
+    image: ${IMG_PROCESSOR}
+    command: sh -c "alembic upgrade head 2>&1 || echo 'Alembic migration had errors, continuing...'; python -m scripts.run_seeders; uvicorn src.main:app --host $$HOST --port $$PORT"
+    volumes:
+    - /opt/britto/crm/evo-jud-crm/processor-patch/sitecustomize.py:/usr/local/lib/python3.11/site-packages/sitecustomize.py:ro
+    - evocrm_processor_logs:/app/logs
+    networks:
+    - network_public
+    environment:
+    - POSTGRES_CONNECTION_STRING=postgresql://postgres:${PGVECTOR_PASSWORD}@pgvector:5432/evocrm?sslmode=disable
+    - REDIS_HOST=evocrm_redis
+    - REDIS_PORT=6379
+    - REDIS_PASSWORD=${REDIS_PASSWORD}
+    - REDIS_SSL=false
+    - REDIS_DB=3
+    - REDIS_KEY_PREFIX=a2a_
+    - REDIS_TTL=3600
+    - HOST=0.0.0.0
+    - PORT=8000
+    - DEBUG=false
+    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    - EVOAI_CRM_API_TOKEN=${EVOAI_CRM_API_TOKEN}
+    - EVO_AUTH_BASE_URL=http://evocrm_auth:3001
+    - EVO_AI_CRM_URL=http://evocrm_crm:3000
+    - CORE_SERVICE_URL=http://evocrm_core:5555/api/v1
+    - APP_URL=https://${HOST_API_CRM}
+    - API_URL=https://${HOST_API_CRM}
+    - API_TITLE=Agent Processor Community
+    - API_DESCRIPTION=Agent Processor Community for Evo AI
+    - API_VERSION=1.0.0
+    - ORGANIZATION_NAME=${ORG_NAME}
+    - TOOLS_CACHE_ENABLED=true
+    - TOOLS_CACHE_TTL=3600
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2048M
+  evocrm_bot_runtime:
+    image: ${IMG_BOT_RUNTIME}
+    networks:
+    - network_public
+    environment:
+    - LISTEN_ADDR=0.0.0.0:8080
+    - REDIS_URL=redis://evocrm_redis:6379/5
+    - AI_PROCESSOR_URL=http://evocrm_processor:8000
+    - BOT_RUNTIME_SECRET=${BOT_RUNTIME_SECRET}
+    - AI_CALL_TIMEOUT_SECONDS=30
+    - AI_CALL_MAX_RETRIES=2
+    - AI_CALL_RETRY_BASE_MS=200
+    - MEDIA_HOST_ALLOWLIST=${HOST_API_CRM}
+    - AI_FAILURE_NOTICE=Tive uma instabilidade aqui, mas já já te respondo. 🙏
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_frontend:
+    image: ${IMG_FRONTEND}
+    networks:
+    - network_public
+    environment:
+    - VITE_APP_ENV=production
+    - VITE_API_URL=https://${HOST_API_CRM}
+    - VITE_AUTH_API_URL=https://${HOST_API_CRM}
+    - VITE_EVOAI_API_URL=https://${HOST_API_CRM}
+    - VITE_AGENT_PROCESSOR_URL=https://${HOST_API_CRM}
+    - VITE_WS_URL=https://${HOST_API_CRM}
+    - VITE_EVOFLOW_API_URL=https://${HOST_API_CRM}
+    - VITE_DASHBOARD_APP_BRIDGE_ORIGINS=${DASHBOARD_APP_ORIGINS}
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+      labels:
+      - traefik.enable
+      - traefik.docker.network
+      - traefik.http.routers.evocrm_frontend.rule
+      - traefik.http.middlewares.evocrm_crm_old_redirect.redirectregex.regex
+      - traefik.http.middlewares.evocrm_crm_old_redirect.redirectregex.replacement
+      - traefik.http.middlewares.evocrm_crm_old_redirect.redirectregex.permanent
+      - traefik.http.routers.evocrm_frontend.entrypoints
+      - traefik.http.routers.evocrm_frontend.priority
+      - traefik.http.routers.evocrm_frontend.tls.certresolver
+      - traefik.http.routers.evocrm_frontend.service
+      - traefik.http.services.evocrm_frontend.loadbalancer.server.port
+      - traefik.http.services.evocrm_frontend.loadbalancer.passHostHeader
+      update_config:
+        order: start-first
+        failure_action: rollback
+        monitor: 10s
+  evocrm_redis:
+    image: ${IMG_REDIS}
+    command:
+    - redis-server
+    - --appendonly
+    - 'yes'
+    - --port
+    - '6379'
+    - --maxmemory
+    - 256mb
+    - --maxmemory-policy
+    - noeviction
+    volumes:
+    - evocrm_redis:/data
+    networks:
+    - network_public
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_clickhouse:
+    image: ${IMG_CLICKHOUSE}
+    environment:
+    - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+    - CLICKHOUSE_DB=default
+    volumes:
+    - evocrm_clickhouse_data:/var/lib/clickhouse
+    networks:
+    - network_public
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_rabbitmq:
+    image: ${IMG_RABBITMQ}
+    environment:
+    - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+    - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+    volumes:
+    - evocrm_rabbitmq_data:/var/lib/rabbitmq
+    networks:
+    - network_public
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+  evocrm_evoflow:
+    image: ${IMG_EVOFLOW}
+    command:
+    - sh
+    - -c
+    - 'until node -e ''require("http").get("http://evocrm_clickhouse:8123/ping",r=>process.exit(r.statusCode===200?0:1)).on("error",()=>process.exit(1))''; do echo ''Waiting for clickhouse...''; sleep 5; done
+
+      node -e ''const{Client}=require("pg");const db=process.env.POSTGRES_DB_DATABASE;const c=new Client({host:process.env.POSTGRES_DB_HOST,port:+(process.env.POSTGRES_DB_PORT||5432),user:process.env.POSTGRES_DB_USERNAME,password:process.env.POSTGRES_DB_PASSWORD,database:"postgres"});c.connect().then(()=>c.query("CREATE DATABASE "+db)).then(()=>console.log("[init] created "+db)).catch(e=>console.log("[init] "+(e.code==="42P04"?"db already exists":e.message))).finally(()=>c.end());''
+
+      node_modules/.bin/typeorm migration:run -d dist/database/ormconfig.js || echo "[init] migration:run failed (continuing)"
+
+      exec node dist/main.js
+
+      '
+    networks:
+    - network_public
+    environment:
+    - NODE_ENV=production
+    - RUN_MODE=api
+    - QUEUE_MODE=direct
+    - STORAGE_MODE=clickhouse
+    - WRITE_MODE=ch-sync
+    - PORT=3334
+    - LOG_LEVEL=log
+    - AUTH_APIKEY_INTEGRATION_LOCAL=${EVOFLOW_INTEGRATION_KEY}
+    - EVO_AUTH_SERVICE_URL=http://evocrm_auth:3001
+    - EVO_AUTH_VALIDATE_TOKEN_ENDPOINT=/api/v1/auth/validate
+    - EVOAI_CRM_BASE_URL=http://evocrm_crm:3000
+    - EVOAI_CRM_API_TOKEN=${EVOAI_CRM_API_TOKEN}
+    - BROKER_TYPE=rabbitmq
+    - RABBITMQ_URL=amqp://evoflow:${RABBITMQ_PASSWORD}@evocrm_rabbitmq:5672
+    - CLICKHOUSE_HOST=evocrm_clickhouse
+    - CLICKHOUSE_PORT=8123
+    - CLICKHOUSE_DATABASE=evo_campaign
+    - CLICKHOUSE_USERNAME=${CLICKHOUSE_USER}
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+    - CLICKHOUSE_TABLE=contact_events
+    - POSTGRES_DB_HOST=pgvector
+    - POSTGRES_DB_PORT=5432
+    - POSTGRES_DB_USERNAME=postgres
+    - POSTGRES_DB_PASSWORD=${PGVECTOR_PASSWORD}
+    - POSTGRES_DB_DATABASE=evo_campaign
+    - REDIS_HOST=evocrm_redis
+    - REDIS_PORT=6379
+    - REDIS_PASSWORD=${REDIS_PASSWORD}
+    - REDIS_DB=4
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+      labels:
+      - traefik.enable=1
+      - traefik.docker.network=network_public
+      - traefik.http.routers.evocrm_evoflow.rule=Host(`${HOST_API_CRM}`) && (PathPrefix(`/api/v1/journeys`) || PathPrefix(`/api/v1/campaigns`))
+      - traefik.http.routers.evocrm_evoflow.entrypoints=websecure
+      - traefik.http.routers.evocrm_evoflow.priority=10
+      - traefik.http.routers.evocrm_evoflow.tls.certresolver=letsencryptresolver
+      - traefik.http.routers.evocrm_evoflow.service=evocrm_evoflow
+      - traefik.http.services.evocrm_evoflow.loadbalancer.server.port=3334
+      - traefik.http.services.evocrm_evoflow.loadbalancer.passHostHeader=true
+volumes:
+  evocrm_processor_logs:
+    external: true
+    name: evocrm_processor_logs
+  evocrm_redis:
+    external: true
+    name: evocrm_redis
+  evocrm_storage:
+    external: true
+    name: evocrm_storage
+  evocrm_auth_storage:
+    external: true
+    name: evocrm_auth_storage
+  evocrm_clickhouse_data:
+    external: true
+    name: evocrm_clickhouse_data
+  evocrm_rabbitmq_data:
+    external: true
+    name: evocrm_rabbitmq_data
+networks:
+  network_public:
+    external: true
+    name: network_public
