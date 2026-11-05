@@ -325,7 +325,8 @@ primeira_conta() {
     n=$(contar_usuarios)
     [ "${n:-0}" -ge 1 ] 2>/dev/null && break
     info "Abra ${branco}https://$(env_get HOST_CRM)${reset} e crie a conta do administrador (cadastro aberto só agora)."
-    echo -en "  ${amarelo}Depois de criar a conta, aperte Enter${reset}"; read -r
+    echo -en "  ${amarelo}Depois de criar a conta, aperte Enter${reset}"
+    read -r || morrer "entrada encerrada sem nenhuma conta no CRM"
   done
   ok "conta criada"
   configurar_whatsapp

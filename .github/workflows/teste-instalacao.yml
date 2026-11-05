@@ -23,14 +23,15 @@ jobs:
       - name: Rodar o Britto Wizard (comando oficial)
         run: |
           set +e
-          sudo bash -c "bash <(curl -sSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/britto)" < tests/respostas-completo.txt > wizard.out 2>&1
-          echo "saída do wizard: $?"
+          sudo timeout 75m bash -c "bash <(curl -sSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/britto)" < tests/respostas-completo.txt > wizard.out 2>&1
+          rc=$?; echo "saída do wizard: $rc"
           # Só as linhas de status (sem senhas do RESUMO)
           sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' wizard.out | grep -E '✔|✘|!  |Pronto' || true
+          exit $rc
       - name: Verificar a instalação
         run: sudo bash tests/verificar.sh
       - name: Diagnóstico (se falhar)
-        if: failure()
+        if: always()
         run: |
           sudo docker service ls || true
           for s in $(sudo docker service ls --format '{{.Name}}'); do echo "== $s"; sudo docker service ps "$s" --no-trunc --format '{{.CurrentState}} {{.Error}}' | head -3; done
