@@ -1,0 +1,37 @@
+# Instalação real e completa do evo-jud-crm numa VM Ubuntu 24.04 descartável do GitHub,
+# pelo comando oficial (curl), seguida da verificação ponta a ponta. Só roda manualmente.
+name: teste-instalacao
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  instalar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Máquina
+        run: |
+          lscpu | grep -E 'Model name|^CPU\(s\)'; free -g | head -2
+          grep -qw avx2 /proc/cpuinfo && echo "CPU com AVX2" || echo "CPU sem AVX2"
+      - name: Liberar disco (ferramentas que o teste não usa)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: DNS de teste
+        run: echo "127.0.0.1 portainer.teste.local crm.teste.local api-crm.teste.local whatsapp.teste.local mcp.teste.local assinatura.teste.local" | sudo tee -a /etc/hosts
+      - name: Rodar o Britto Wizard (comando oficial)
+        run: |
+          set +e
+          sudo bash -c "bash <(curl -sSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/britto)" < tests/respostas-completo.txt > wizard.out 2>&1
+          echo "saída do wizard: $?"
+          # Só as linhas de status (sem senhas do RESUMO)
+          sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' wizard.out | grep -E '✔|✘|!  |Pronto' || true
+      - name: Verificar a instalação
+        run: sudo bash tests/verificar.sh
+      - name: Diagnóstico (se falhar)
+        if: failure()
+        run: |
+          sudo docker service ls || true
+          for s in $(sudo docker service ls --format '{{.Name}}'); do echo "== $s"; sudo docker service ps "$s" --no-trunc --format '{{.CurrentState}} {{.Error}}' | head -3; done
+          sudo tail -60 /opt/britto/wizard.log | sed -E 's/(senha|password|token|secret)[^ ]*/\1=***/Ig' || true

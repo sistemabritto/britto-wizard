@@ -287,7 +287,7 @@ instalar_evo_jud() {
   fi
   deploy_portainer evocrm "$D/stacks/evocrm.yaml" || morrer "falha no deploy do CRM"
   esperar "API do CRM em https://$(env_get HOST_API_CRM) (migrações levam 3 a 8 min)" 1200 \
-    curl -fsS -o /dev/null "https://$(env_get HOST_API_CRM)/health" || morrer "a API do CRM não respondeu (veja: docker service logs evocrm_evocrm_crm)"
+    curl -fsSk -o /dev/null "https://$(env_get HOST_API_CRM)/health" || morrer "a API do CRM não respondeu (veja: docker service logs evocrm_evocrm_crm)"
   { echo "CRM:      https://$(env_get HOST_CRM)"; echo "API:      https://$(env_get HOST_API_CRM)";
     echo "WhatsApp: https://$(env_get HOST_WHATSAPP)  (provedor Evolution Go; API key = EVOGO_GLOBAL_API_KEY em $ENVF)"
     echo "  ATIVE o Evolution Go uma vez em https://$(env_get HOST_WHATSAPP)/manager (sem isso responde LICENSE_REQUIRED)"; echo; } >> "$RESUMO"
@@ -303,12 +303,29 @@ criar_db() { # criar_db serviço banco
 primeira_conta() {
   cabecalho "Passo 3 · Primeira conta e template"
   [ "$DRY" = 1 ] && { info "(dry-run) criação da 1ª conta e template"; return; }
-  info "Abra ${branco}https://$(env_get HOST_CRM)${reset} e crie a conta do administrador (cadastro aberto só agora)."
-  local n=0
-  until [ "${n:-0}" -ge 1 ]; do
+  local n=0 nome email senha cod
+  contar_usuarios() { printf 'puts User.count\n' > "$BASE/.u.rb"; rails_runner "$BASE/.u.rb" | tail -1; rm -f "$BASE/.u.rb"; }
+  n=$(contar_usuarios)
+  if [ "${n:-0}" -lt 1 ] 2>/dev/null && confirmar "Criar a conta do administrador agora, pelo wizard?"; then
+    perguntar nome "Nome do administrador" ""
+    perguntar email "E-mail do administrador (login)" ""
+    echo -en "  ${amarelo}Senha (Enter = gerar uma forte)${reset}: "; read -rs senha; echo
+    [ -n "$senha" ] || senha="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-16)Aa1!"
+    cod=$(NOME="$nome" EMAIL="$email" SENHA="$senha" python3 -c 'import json,os;print(json.dumps({"name":os.environ["NOME"],"email":os.environ["EMAIL"],"password":os.environ["SENHA"],"password_confirmation":os.environ["SENHA"]}))' \
+      | curl -sk -o "$BASE/.reg.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @- "https://$(env_get HOST_API_CRM)/api/v1/auth/register")
+    if [[ "$cod" =~ ^20 ]]; then
+      ok "conta $email criada"
+      { echo "Administrador do CRM: $email"; echo "  senha: $senha"; echo; } >> "$RESUMO"
+    else
+      aviso "cadastro pela API respondeu HTTP $cod: $(head -c 200 "$BASE/.reg.json")"
+    fi
+    rm -f "$BASE/.reg.json"
+  fi
+  until [ "${n:-0}" -ge 1 ] 2>/dev/null; do
+    n=$(contar_usuarios)
+    [ "${n:-0}" -ge 1 ] 2>/dev/null && break
+    info "Abra ${branco}https://$(env_get HOST_CRM)${reset} e crie a conta do administrador (cadastro aberto só agora)."
     echo -en "  ${amarelo}Depois de criar a conta, aperte Enter${reset}"; read -r
-    n=$(printf 'puts User.count\n' > "$BASE/.u.rb"; rails_runner "$BASE/.u.rb" | tail -1); rm -f "$BASE/.u.rb"
-    [ "${n:-0}" -ge 1 ] 2>/dev/null || aviso "Ainda não encontrei nenhuma conta no CRM."
   done
   ok "conta criada"
   configurar_whatsapp
@@ -387,7 +404,7 @@ status() {
   docker service ls --format '{{.Replicas}}\t{{.Name}}' 2>/dev/null | sort -k2; echo
   local h
   for h in HOST_PORTAINER HOST_CRM HOST_API_CRM HOST_WHATSAPP HOST_MCP HOST_DOCUSEAL; do
-    v=$(env_get "$h"); [ -n "$v" ] && [[ "$v" != *exemplo* ]] && echo -e "  $h  https://$v  $(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://$v/")"
+    v=$(env_get "$h"); [ -n "$v" ] && [[ "$v" != *exemplo* ]] && echo -e "  $h  https://$v  $(curl -sk -o /dev/null -w '%{http_code}' --max-time 8 "https://$v/")"
   done
 }
 
