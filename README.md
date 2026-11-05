@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo-terminal.png" alt="Britto Wizard: escudo SB e SISTEMA BRITTO no terminal" width="760"></p>
+<p align="center"><img src="assets/logo-terminal.png" alt="Britto Wizard: escudo SB e SISTEMA BRITTO no terminal" width="820"></p>
 
 # Britto Wizard
 
