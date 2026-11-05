@@ -214,7 +214,7 @@ passo_portainer() {
   ( umask 077; portainer render "$WIZ_DIR/infra/traefik-portainer.yaml" "$ENVF" > "$f" ) || morrer "falha ao montar a stack do Traefik"
   executar "deploy Traefik + Portainer" docker stack deploy --prune --resolve-image always -c "$f" traefik; rm -f "$f"
   esperar "Portainer com HTTPS em https://$host (o certificado pode levar 1 a 3 min)" 600 portainer wait "$host" || morrer "Portainer não respondeu."
-  local setup_token; setup_token=$(docker service logs traefik_portainer 2>/dev/null | grep -oE 'setup_token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2)
+  local setup_token; setup_token=$(docker service logs traefik_portainer 2>&1 | grep -oE 'setup_token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2)
   PORTAINER_SETUP_TOKEN="$setup_token" executar "admin do Portainer" portainer init "$host" "$user" "$pass" || morrer "não consegui criar o admin do Portainer"
   esperar "Portainer conectado ao Swarm" 180 portainer ping || morrer "o Portainer não enxergou o Swarm"
   { echo "Portainer: https://$host"; echo "  usuário: $user"; echo "  senha:   $pass"; echo; } >> "$RESUMO"; chmod 600 "$RESUMO"
