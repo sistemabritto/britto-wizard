@@ -282,6 +282,7 @@ instalar_evo_jud() {
     criar_db postgres_postgres evolution_go_auth; criar_db postgres_postgres evolution_go_users
   fi
   deploy_portainer evolution_go "$D/stacks/evolution-go.yaml" || morrer "falha no deploy do Evolution Go"
+  [ "$DRY" = 1 ] || preparar_banco_crm "$D"
   if [ "${BRITTO_TESTE_LEVE:-0}" = 1 ]; then # máquina de teste pequena: infra, bancos e WhatsApp, sem o CRM (~9 GB de imagens)
     aviso "BRITTO_TESTE_LEVE=1: pulando a stack evocrm, a 1ª conta e o template."; return
   fi
@@ -294,6 +295,29 @@ instalar_evo_jud() {
     echo "WhatsApp: https://$(env_get HOST_WHATSAPP)  (provedor Evolution Go; API key = EVOGO_GLOBAL_API_KEY em $ENVF)"
     echo "  ATIVE o Evolution Go uma vez em https://$(env_get HOST_WHATSAPP)/manager (sem isso responde LICENSE_REQUIRED)"; echo; } >> "$RESUMO"
   primeira_conta
+}
+
+preparar_banco_crm() { # banco novo: carrega o schema do CRM antes de subir a stack (evita a corrida CRM x auth)
+  local D=$1 pg envf
+  pg=$(container_de pgvector_pgvector)
+  if docker exec "$pg" psql -U postgres -d evocrm -tAc "select to_regclass('public.schema_migrations') is not null" 2>/dev/null | grep -q t; then
+    ok "banco do CRM já estruturado"; return
+  fi
+  envf=$(mktemp); chmod 600 "$envf"
+  portainer render "$D/stacks/evocrm.yaml" "$ENVF" | python3 -c '
+import sys, yaml
+svc = yaml.safe_load(sys.stdin)["services"]["evocrm_crm"]
+env = svc.get("environment") or []
+env = env if isinstance(env, list) else [f"{k}={v}" for k, v in env.items()]
+print("\n".join(e for e in env if not e.startswith("REDIS_URL=")))' > "$envf"
+  echo "REDIS_URL=redis://britto-redis-init:6379/2" >> "$envf"
+  docker rm -f britto-redis-init >/dev/null 2>&1
+  docker run -d --name britto-redis-init --network network_public "$(env_get IMG_REDIS)" >/dev/null
+  executar "estrutura do banco do CRM (schema e dados iniciais)" docker run --rm --network network_public --env-file "$envf" \
+    --entrypoint sh "$(env_get IMG_CRM)" -c 'bundle exec rails db:prepare'
+  local rc=$?
+  docker rm -f britto-redis-init >/dev/null 2>&1; rm -f "$envf"
+  [ $rc = 0 ] || morrer "não consegui preparar o banco do CRM (detalhes em $BASE/wizard.log)"
 }
 
 criar_db() { # criar_db serviço banco
