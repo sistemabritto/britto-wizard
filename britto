@@ -9,14 +9,14 @@ DEST=/opt/britto/wizard
 [ "$(id -u)" = 0 ] || { echo "Rode como root: sudo -i e depois o comando de novo."; exit 1; }
 export DEBIAN_FRONTEND=noninteractive
 echo -e "\e[92m» Atualizando a lista de pacotes e instalando git/curl…\e[0m"
-apt-get update -y >/dev/null
-apt-get install -y git curl ca-certificates >/dev/null
+apt-get update -y >/dev/null </dev/null
+apt-get install -y git curl ca-certificates >/dev/null </dev/null
 
 mkdir -p /opt/britto && chmod 700 /opt/britto
 if [ -d "$DEST/.git" ]; then
-  git -C "$DEST" pull --ff-only -q
+  git -C "$DEST" pull --ff-only -q </dev/null
 else
-  git clone -q --depth 1 "$REPO" "$DEST"
+  git clone -q --depth 1 "$REPO" "$DEST" </dev/null
 fi
 chmod +x "$DEST/BrittoWizard"
 exec bash "$DEST/BrittoWizard" "$@"

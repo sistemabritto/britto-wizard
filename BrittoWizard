@@ -62,7 +62,7 @@ confirmar() { # confirmar "Pergunta" (padrão S)
 executar() { # executar "descrição" comando...
   local desc=$1; shift
   if [ "$DRY" = 1 ]; then info "${cinza}(dry-run)${reset} $desc"; return 0; fi
-  if "$@" >>"$BASE/wizard.log" 2>&1; then ok "$desc"; else erro "$desc (detalhes em $BASE/wizard.log)"; return 1; fi
+  if "$@" </dev/null >>"$BASE/wizard.log" 2>&1; then ok "$desc"; else erro "$desc (detalhes em $BASE/wizard.log)"; return 1; fi
 }
 
 env_get() { [ -f "$ENVF" ] && grep -m1 "^$1=" "$ENVF" | cut -d= -f2- || true; }
