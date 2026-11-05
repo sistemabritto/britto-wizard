@@ -15,6 +15,7 @@
 #       britto-wizard resumo       mostra o resumo da instalação
 #
 # Variáveis úteis: BRITTO_DRY_RUN=1 (só valida e renderiza, não instala nada)
+#                  BRITTO_TESTE_LEVE=1 (instala infra, bancos e WhatsApp; pula o CRM: teste em máquina pequena)
 
 set -uo pipefail
 
@@ -173,15 +174,20 @@ preparar_servidor() {
   export DEBIAN_FRONTEND=noninteractive
   executar "apt update" apt-get update -y
   executar "atualizando o sistema (apt upgrade)" apt-get -o Dpkg::Options::=--force-confold upgrade -y
-  executar "dependências (git, curl, jq, python3-yaml, dnsutils…)" apt-get install -y ca-certificates curl git jq openssl python3 python3-yaml dnsutils apache2-utils
+  executar "dependências (git, curl, jq, python3-yaml, dnsutils…)" apt-get install -y ca-certificates curl git jq openssl python3 python3-yaml dnsutils apache2-utils iproute2
   timedatectl set-timezone America/Sao_Paulo >/dev/null 2>&1 && ok "fuso horário America/Sao_Paulo"
   if ! swapon --show | grep -q . && [ "$ram" -lt 16 ]; then
     executar "swap de 4 GB" bash -c 'fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && grep -q "^/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab'
   fi
   if ! command -v docker >/dev/null; then executar "Docker (get.docker.com)" bash -c 'curl -fsSL https://get.docker.com | sh'; fi
   systemctl enable --now docker >/dev/null 2>&1
+  if ! docker info >/dev/null 2>&1; then # sem systemd (container de teste, algumas imagens de VPS)
+    (dockerd >>"$BASE/dockerd.log" 2>&1 &)
+    esperar "Docker iniciando" 90 docker info || morrer "Docker não iniciou (veja $BASE/dockerd.log)"
+  fi
+  local ip_local; ip_local=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
   if [ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" != active ]; then
-    executar "Docker Swarm" docker swarm init --advertise-addr "$IP"
+    executar "Docker Swarm (anunciando ${ip_local:-$IP})" docker swarm init --advertise-addr "${ip_local:-$IP}"
   else ok "Docker Swarm ativo"; fi
   docker network inspect network_public >/dev/null 2>&1 || executar "rede network_public" docker network create --driver overlay --attachable network_public
   ln -sf "$WIZ_DIR/BrittoWizard" /usr/local/bin/britto-wizard && ok "comando britto-wizard instalado"
@@ -273,8 +279,11 @@ instalar_evo_jud() {
     criar_db pgvector_pgvector evocrm; criar_db pgvector_pgvector evo_campaign
     criar_db postgres_postgres evolution_go_auth; criar_db postgres_postgres evolution_go_users
   fi
-  deploy_portainer evocrm "$D/stacks/evocrm.yaml"
   deploy_portainer evolution_go "$D/stacks/evolution-go.yaml"
+  if [ "${BRITTO_TESTE_LEVE:-0}" = 1 ]; then # máquina de teste pequena: infra, bancos e WhatsApp, sem o CRM (~9 GB de imagens)
+    aviso "BRITTO_TESTE_LEVE=1: pulando a stack evocrm, a 1ª conta e o template."; return
+  fi
+  deploy_portainer evocrm "$D/stacks/evocrm.yaml"
   esperar "API do CRM em https://$(env_get HOST_API_CRM) (migrações levam 3 a 8 min)" 1200 \
     curl -fsS -o /dev/null "https://$(env_get HOST_API_CRM)/health"
   { echo "CRM:      https://$(env_get HOST_CRM)"; echo "API:      https://$(env_get HOST_API_CRM)";
@@ -397,5 +406,5 @@ case "${1:-}" in
     confirmar "Instalar o conector MCP (Claude, ChatGPT/Codex)?" && passo_mcp
     confirmar "Instalar a assinatura eletrônica (DocuSeal)?" && passo_docuseal
     final ;;
-  *) sed -n '9,18p' "$0" ;;
+  *) sed -n '9,19p' "$0" ;;
 esac
