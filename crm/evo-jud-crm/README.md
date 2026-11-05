@@ -5,7 +5,7 @@ Testado em Ubuntu 24.04, Intel Xeon E3 v2 (Ivy Bridge, **sem AVX2**). Por isso o
 
 | Stack | Arquivo | Serviços |
 |---|---|---|
-| traefik | `stacks/traefik-portainer.yaml` | Traefik, Portainer, agente |
+| traefik | `../../infra/traefik-portainer.yaml` | Traefik, Portainer, agente (comum a todos os CRMs) |
 | pgvector | `stacks/pgvector.yaml` | banco do CRM (`evocrm`, `evo_campaign`) |
 | postgres | `stacks/postgres.yaml` | banco do WhatsApp (`evolution_go_auth`, `evolution_go_users`) |
 | evocrm | `stacks/evocrm.yaml` | gateway, auth, crm (evo-jud-crm-api), sidekiqs, core, processor (+ patch de áudio), bot runtime, frontend (evo-jud-crm), redis, clickhouse, rabbitmq, evoflow |

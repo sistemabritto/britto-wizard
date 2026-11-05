@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Britto Wizard · comando de entrada (equivalente ao get.setuporion.sh do SetupOrion).
+#   bash <(curl -sSL https://raw.githubusercontent.com/sistemabritto/britto-wizard/main/britto)
+# Atualiza o servidor, baixa (ou atualiza) o wizard em /opt/britto/wizard e inicia.
+set -euo pipefail
+REPO=${BRITTO_REPO:-https://github.com/sistemabritto/britto-wizard.git}
+DEST=/opt/britto/wizard
+
+[ "$(id -u)" = 0 ] || { echo "Rode como root: sudo -i e depois o comando de novo."; exit 1; }
+export DEBIAN_FRONTEND=noninteractive
+echo -e "\e[92m» Atualizando a lista de pacotes e instalando git/curl…\e[0m"
+apt-get update -y >/dev/null
+apt-get install -y git curl ca-certificates >/dev/null
+
+mkdir -p /opt/britto && chmod 700 /opt/britto
+if [ -d "$DEST/.git" ]; then
+  git -C "$DEST" pull --ff-only -q
+else
+  git clone -q --depth 1 "$REPO" "$DEST"
+fi
+chmod +x "$DEST/BrittoWizard"
+exec bash "$DEST/BrittoWizard" "$@"

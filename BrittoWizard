@@ -1,0 +1,401 @@
+#!/usr/bin/env bash
+## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ##
+##                              BRITTO WIZARD · Sistema Britto                       ##
+##   Instalador do evo-jud-crm (e próximos CRMs de nicho) em VPS Ubuntu 24.04.       ##
+##   Fork do SetupOrion (MIT) da OrionDesign: estrutura, Traefik + Portainer e o     ##
+##   deploy via API do Portainer vêm de lá. Créditos: github.com/oriondesign2015     ##
+## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ## // ##
+#
+# Uso:  britto-wizard              fluxo completo (pula o que já estiver feito)
+#       britto-wizard status       situação das stacks e endereços
+#       britto-wizard template     aplica o template de nicho no CRM
+#       britto-wizard fechar       fecha o cadastro público do CRM
+#       britto-wizard mcp          instala/atualiza o conector MCP
+#       britto-wizard docuseal     instala a assinatura eletrônica
+#       britto-wizard resumo       mostra o resumo da instalação
+#
+# Variáveis úteis: BRITTO_DRY_RUN=1 (só valida e renderiza, não instala nada)
+
+set -uo pipefail
+
+WIZ_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+BASE=${BRITTO_BASE:-/opt/britto}
+ENVF=$BASE/.env
+RESUMO=$BASE/RESUMO.txt
+DRY=${BRITTO_DRY_RUN:-0}
+CRM_ID=""           # definido no passo 2 (ex.: evo-jud-crm)
+
+verde="\e[92m"; verde2="\e[32m"; branco="\e[97m"; amarelo="\e[93m"; vermelho="\e[91m"; cinza="\e[90m"; reset="\e[0m"
+
+# shellcheck source=lib/logo.sh
+. "$WIZ_DIR/lib/logo.sh"
+
+## ------------------------------------------------------------------ utilidades
+ok()    { echo -e "  ${verde}✔${reset} $*"; }
+info()  { echo -e "  ${branco}•${reset} $*"; }
+aviso() { echo -e "  ${amarelo}!${reset} $*"; }
+erro()  { echo -e "  ${vermelho}✘ $*${reset}"; }
+morrer(){ erro "$*"; exit 1; }
+linha() { echo -e "${verde2}────────────────────────────────────────────────────────────────────────────────${reset}"; }
+
+cabecalho() {
+  clear
+  echo; logo; echo
+  linha
+  echo -e "  ${branco}BRITTO WIZARD${reset} ${cinza}· instalador de CRMs de nicho · baseado no SetupOrion${reset}"
+  [ -n "${1:-}" ] && echo -e "  ${verde}$1${reset}"
+  linha; echo
+}
+
+perguntar() { # perguntar VAR "Pergunta" [padrão]
+  local var=$1 msg=$2 def=${3:-} r
+  if [ -n "$def" ]; then echo -en "  ${amarelo}$msg${reset} ${cinza}[$def]${reset}: "; else echo -en "  ${amarelo}$msg${reset}: "; fi
+  read -r r
+  printf -v "$var" '%s' "${r:-$def}"
+}
+
+confirmar() { # confirmar "Pergunta" (padrão S)
+  local r; echo -en "  ${amarelo}$1${reset} ${cinza}[S/n]${reset}: "; read -r r
+  [[ -z "$r" || "$r" =~ ^[sSyY] ]]
+}
+
+executar() { # executar "descrição" comando...
+  local desc=$1; shift
+  if [ "$DRY" = 1 ]; then info "${cinza}(dry-run)${reset} $desc"; return 0; fi
+  if "$@" >>"$BASE/wizard.log" 2>&1; then ok "$desc"; else erro "$desc (detalhes em $BASE/wizard.log)"; return 1; fi
+}
+
+env_get() { [ -f "$ENVF" ] && grep -m1 "^$1=" "$ENVF" | cut -d= -f2- || true; }
+env_set() { # env_set CHAVE valor
+  local k=$1 v=$2 tmp; tmp=$(mktemp)
+  if grep -q "^$k=" "$ENVF" 2>/dev/null; then
+    awk -v k="$k" -v v="$v" 'BEGIN{FS=OFS="="} $1==k{print k"="v; next} {print}' "$ENVF" > "$tmp"
+  else cat "$ENVF" > "$tmp" 2>/dev/null; echo "$k=$v" >> "$tmp"; fi
+  cat "$tmp" > "$ENVF"; rm -f "$tmp"; chmod 600 "$ENVF"
+}
+
+gerar_segredos() { # preenche __GERAR_*__ do .env sem imprimir nada
+  local k t v
+  while IFS='=' read -r k t; do
+    case "$t" in
+      __GERAR_HEX32__)  v=$(openssl rand -hex 16) ;;
+      __GERAR_HEX64__)  v=$(openssl rand -hex 32) ;;
+      __GERAR_HEX128__) v=$(openssl rand -hex 64) ;;
+      __GERAR_FERNET__) v=$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') ;;
+      *) continue ;;
+    esac
+    env_set "$k" "$v"
+  done < <(grep -E '^[A-Z0-9_]+=__GERAR_[A-Z0-9]+__$' "$ENVF")
+}
+
+mesclar_env() { # mesclar_env arquivo: adiciona ao .env as chaves que ainda não existem
+  local k v
+  while IFS= read -r l; do
+    [[ "$l" =~ ^[A-Z0-9_]+= ]] || continue
+    k=${l%%=*}; v=${l#*=}
+    grep -q "^$k=" "$ENVF" 2>/dev/null || echo "$k=$v" >> "$ENVF"
+  done < "$1"
+  chmod 600 "$ENVF"
+}
+
+ip_publico() { curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'; }
+
+checar_dns() { # checar_dns host
+  local h=$1 r; r=$(dig +short A "$h" 2>/dev/null | tail -1)
+  if [ "$r" = "$IP" ]; then ok "DNS $h → $IP"; return 0; fi
+  aviso "DNS $h aponta para '${r:-nada}', esperado $IP. Crie um registro A para $h → $IP (sem proxy da Cloudflare na 1ª emissão do certificado)."
+  confirmar "Continuar mesmo assim?" || exit 1
+}
+
+stack_existe() { docker stack ls --format '{{.Name}}' 2>/dev/null | grep -qx "$1"; }
+
+container_de() { docker ps -q -f "name=^${1}\." | head -1; }
+
+esperar() { # esperar "descrição" segundos comando...
+  local desc=$1 max=$2 i; shift 2
+  [ "$DRY" = 1 ] && { info "${cinza}(dry-run)${reset} esperar: $desc"; return 0; }
+  echo -en "  ${branco}…${reset} $desc "
+  for ((i = 0; i < max; i += 5)); do
+    if "$@" >/dev/null 2>&1; then echo -e "\r  ${verde}✔${reset} $desc            "; return 0; fi
+    echo -n "."; sleep 5
+  done
+  echo; erro "$desc: tempo esgotado"; return 1
+}
+
+portainer() { python3 "$WIZ_DIR/lib/portainer.py" "$@"; }
+
+deploy_portainer() { # deploy_portainer nome arquivo.yaml
+  if [ "$DRY" = 1 ]; then
+    portainer render "$2" "$ENVF" | python3 -c 'import sys,yaml; yaml.safe_load(sys.stdin)' \
+      && ok "(dry-run) $1 renderizada e YAML válido" || erro "(dry-run) $1 inválida"
+    return
+  fi
+  executar "deploy da stack $1 (Portainer)" portainer deploy "$1" "$2" "$ENVF"
+}
+
+volumes_de() { # cria os volumes external declarados num YAML
+  local v
+  for v in $(python3 -c 'import sys,yaml;d=yaml.safe_load(open(sys.argv[1]));print(" ".join((x or {}).get("name",k) for k,x in (d.get("volumes") or {}).items()))' "$1"); do
+    [ "$DRY" = 1 ] || docker volume create "$v" >/dev/null 2>&1
+  done
+}
+
+rails_runner() { # rails_runner arquivo.rb [VAR=valor...]  (roda dentro do CRM)
+  local f=$1 c envs=(); shift
+  c=$(container_de evocrm_evocrm_crm) || true
+  [ -n "$c" ] || { erro "container do CRM não encontrado"; return 1; }
+  for e in "$@"; do envs+=(-e "$e"); done
+  docker cp "$f" "$c:/tmp/britto.rb" >/dev/null && docker exec "${envs[@]}" "$c" bundle exec rails runner /tmp/britto.rb 2>/dev/null | grep -vE " (INFO|WARN|DEBUG) " ; docker exec "$c" rm -f /tmp/britto.rb
+}
+
+## ------------------------------------------------------------- passo 0: servidor
+preparar_servidor() {
+  cabecalho "Passo 0 · Preparando o servidor"
+  [ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || morrer "Rode como root (sudo -i)."
+  . /etc/os-release
+  if [ "${ID:-}" = ubuntu ] && [ "${VERSION_ID:-}" = 24.04 ]; then ok "Ubuntu 24.04"
+  elif [ "${ID:-}" = debian ] || [ "${ID:-}" = ubuntu ]; then aviso "$PRETTY_NAME: o recomendado é Ubuntu 24.04 (o SetupOrion também roda em Debian 12)."
+  else morrer "Sistema não suportado: ${PRETTY_NAME:-desconhecido}"; fi
+  [ "$(uname -m)" = x86_64 ] || morrer "Arquitetura $(uname -m) não suportada (as imagens são amd64)."
+  local cpu ram disco; cpu=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs)
+  ram=$(awk '/MemTotal/{printf "%d", $2/1024/1024+0.5}' /proc/meminfo); disco=$(df -BG / | awk 'NR==2{print $4+0}')
+  info "CPU: $cpu ($(nproc) vCPU)"
+  if grep -qw avx2 /proc/cpuinfo; then ok "CPU com AVX2"
+  else aviso "CPU sem AVX2 (comum na Database Mart: Xeon E3 v2). Sem problema: o ClickHouse fica fixo na 26.3 LTS, que roda sem AVX2."; fi
+  [ "$ram" -ge 7 ] && ok "RAM: ${ram} GB" || aviso "RAM: ${ram} GB. O evo-jud-crm completo pede 8 GB (mínimo 4 GB com swap)."
+  [ "$disco" -ge 40 ] && ok "Disco livre: ${disco} GB" || aviso "Disco livre: ${disco} GB (recomendado 40 GB+)."
+  IP=$(ip_publico); ok "IP público: $IP"
+
+  mkdir -p "$BASE"; chmod 700 "$BASE"; touch "$BASE/wizard.log"; chmod 600 "$BASE/wizard.log"
+  [ -f "$ENVF" ] || { : > "$ENVF"; chmod 600 "$ENVF"; }
+  [ "$DRY" = 1 ] && return
+
+  export DEBIAN_FRONTEND=noninteractive
+  executar "apt update" apt-get update -y
+  executar "atualizando o sistema (apt upgrade)" apt-get -o Dpkg::Options::=--force-confold upgrade -y
+  executar "dependências (git, curl, jq, python3-yaml, dnsutils…)" apt-get install -y ca-certificates curl git jq openssl python3 python3-yaml dnsutils apache2-utils
+  timedatectl set-timezone America/Sao_Paulo >/dev/null 2>&1 && ok "fuso horário America/Sao_Paulo"
+  if ! swapon --show | grep -q . && [ "$ram" -lt 16 ]; then
+    executar "swap de 4 GB" bash -c 'fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && grep -q "^/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+  fi
+  if ! command -v docker >/dev/null; then executar "Docker (get.docker.com)" bash -c 'curl -fsSL https://get.docker.com | sh'; fi
+  systemctl enable --now docker >/dev/null 2>&1
+  if [ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" != active ]; then
+    executar "Docker Swarm" docker swarm init --advertise-addr "$IP"
+  else ok "Docker Swarm ativo"; fi
+  docker network inspect network_public >/dev/null 2>&1 || executar "rede network_public" docker network create --driver overlay --attachable network_public
+  ln -sf "$WIZ_DIR/BrittoWizard" /usr/local/bin/britto-wizard && ok "comando britto-wizard instalado"
+}
+
+## ------------------------------------------------- passo 1: Traefik + Portainer
+passo_portainer() {
+  cabecalho "Passo 1 · Traefik (HTTPS) + Portainer"
+  if stack_existe traefik || stack_existe portainer || [ -f /root/dados_vps/dados_portainer ]; then
+    ok "Traefik/Portainer já instalados (SetupOrion ou wizard): pulando."; return
+  fi
+  local host email user pass
+  perguntar host "Domínio do Portainer (ex.: portainer.seudominio.com.br)" "$(env_get HOST_PORTAINER)"
+  perguntar email "E-mail para os certificados (Let's Encrypt)" "$(env_get ACME_EMAIL)"
+  [ -n "$host" ] && [ -n "$email" ] || morrer "Domínio e e-mail são obrigatórios."
+  checar_dns "$host"
+  env_set HOST_PORTAINER "$host"; env_set ACME_EMAIL "$email"
+  mesclar_env "$WIZ_DIR/infra/images.env"
+  user="admin"; pass=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)
+
+  local f="$BASE/.render-traefik.yaml"
+  volumes_de "$WIZ_DIR/infra/traefik-portainer.yaml"
+  if [ "$DRY" = 1 ]; then deploy_portainer traefik "$WIZ_DIR/infra/traefik-portainer.yaml"; return; fi
+  ( umask 077; portainer render "$WIZ_DIR/infra/traefik-portainer.yaml" "$ENVF" > "$f" ) || morrer "falha ao montar a stack do Traefik"
+  executar "deploy Traefik + Portainer" docker stack deploy --prune --resolve-image always -c "$f" traefik; rm -f "$f"
+  esperar "Portainer com HTTPS em https://$host (o certificado pode levar 1 a 3 min)" 600 portainer wait "$host" || morrer "Portainer não respondeu."
+  executar "admin do Portainer" portainer init "$host" "$user" "$pass"
+  { echo "Portainer: https://$host"; echo "  usuário: $user"; echo "  senha:   $pass"; echo; } >> "$RESUMO"; chmod 600 "$RESUMO"
+  ok "Credenciais do Portainer guardadas em $RESUMO"
+}
+
+## ------------------------------------------------------ passo 2: escolha do CRM
+CRMS=(
+  "evo-jud-crm|Jurídico (escritórios de advocacia)|ativo"
+  "evo-clinic-crm|Clínicas e consultórios|em breve"
+  "evo-store-crm|Lojas e varejo|em breve"
+  "evo-delivery-crm|Delivery e restaurantes|em breve"
+  "evo-service-crm|Serviços online e infoprodutos|em breve"
+)
+
+passo_crm() {
+  cabecalho "Passo 2 · Qual CRM você vai instalar?"
+  local i=1 c id nome st esc
+  for c in "${CRMS[@]}"; do
+    IFS='|' read -r id nome st <<<"$c"
+    if [ "$st" = ativo ]; then echo -e "   ${verde}[$i]${reset} ${branco}$id${reset}  $nome"
+    else echo -e "   ${cinza}[$i] $id  $nome  ($st)${reset}"; fi
+    i=$((i + 1))
+  done
+  echo; perguntar esc "Escolha" "1"
+  c=${CRMS[$((esc - 1))]:-}; IFS='|' read -r id nome st <<<"$c"
+  [ "$st" = ativo ] || morrer "$id ainda não está disponível. Por enquanto: evo-jud-crm."
+  CRM_ID=$id; env_set BRITTO_CRM "$CRM_ID"
+  instalar_evo_jud
+}
+
+instalar_evo_jud() {
+  local D="$WIZ_DIR/crm/evo-jud-crm" dom
+  cabecalho "Passo 2 · evo-jud-crm · dados da instalação"
+  mesclar_env "$D/env.example"; mesclar_env "$D/images.env"; mesclar_env "$WIZ_DIR/infra/images.env"
+  local org; perguntar org "Nome do escritório" "$(env_get ORG_NAME | sed 's/^Meu Escritório$//')"; env_set ORG_NAME "${org:-Escritório}"
+  dom=$(env_get HOST_PORTAINER | sed 's/^portainer\.//'); [[ "$dom" == *exemplo* ]] && dom=""
+  perguntar dom "Domínio base (ex.: seudominio.com.br)" "$dom"
+  local k p v
+  for p in "HOST_CRM:CRM (painel):crm" "HOST_API_CRM:API do CRM:api-crm" "HOST_WHATSAPP:WhatsApp (Evolution Go):whatsapp"; do
+    IFS=: read -r k v sub <<<"$p"
+    local atual; atual=$(env_get "$k"); [[ "$atual" == *exemplo* || -z "$atual" ]] && atual="$sub.$dom"
+    perguntar v "Endereço do $v" "$atual"; env_set "$k" "$v"
+  done
+  echo; info "SMTP envia convites e recuperação de senha (Gmail: smtp.gmail.com, porta 587, senha de app). Enter pula."
+  perguntar v "Servidor SMTP" "$(env_get SMTP_ADDRESS)"; env_set SMTP_ADDRESS "$v"
+  perguntar v "Usuário SMTP (e-mail)" "$(env_get SMTP_USERNAME)"; env_set SMTP_USERNAME "$v"; env_set MAILER_SENDER_EMAIL "$v"
+  [ -n "$v" ] && env_set SMTP_DOMAIN "${v#*@}"
+  if [ -n "$v" ]; then echo -en "  ${amarelo}Senha SMTP (não aparece)${reset}: "; read -rs v; echo; [ -n "$v" ] && env_set SMTP_PASSWORD "$v"; fi
+  gerar_segredos; ok "segredos gerados em $ENVF (600)"
+
+  for k in HOST_CRM HOST_API_CRM HOST_WHATSAPP; do checar_dns "$(env_get "$k")"; done
+
+  cabecalho "Passo 2 · evo-jud-crm · instalando"
+  mkdir -p "$BASE/crm/evo-jud-crm/processor-patch"
+  cp "$D/processor-patch/sitecustomize.py" "$BASE/crm/evo-jud-crm/processor-patch/" && ok "patch de áudio do processor"
+  local s
+  for s in pgvector postgres evocrm evolution-go; do volumes_de "$D/stacks/$s.yaml"; done
+  stack_existe pgvector || deploy_portainer pgvector "$D/stacks/pgvector.yaml"
+  stack_existe postgres || deploy_portainer postgres "$D/stacks/postgres.yaml"
+  esperar "banco do CRM (pgvector)" 300 bash -c 'docker exec $(docker ps -q -f name=^pgvector_pgvector\\. | head -1) pg_isready -U postgres'
+  esperar "banco do WhatsApp (postgres)" 300 bash -c 'docker exec $(docker ps -q -f name=^postgres_postgres\\. | head -1) pg_isready -U postgres'
+  if [ "$DRY" != 1 ]; then
+    criar_db pgvector_pgvector evocrm; criar_db pgvector_pgvector evo_campaign
+    criar_db postgres_postgres evolution_go_auth; criar_db postgres_postgres evolution_go_users
+  fi
+  deploy_portainer evocrm "$D/stacks/evocrm.yaml"
+  deploy_portainer evolution_go "$D/stacks/evolution-go.yaml"
+  esperar "API do CRM em https://$(env_get HOST_API_CRM) (migrações levam 3 a 8 min)" 1200 \
+    curl -fsS -o /dev/null "https://$(env_get HOST_API_CRM)/health"
+  { echo "CRM:      https://$(env_get HOST_CRM)"; echo "API:      https://$(env_get HOST_API_CRM)";
+    echo "WhatsApp: https://$(env_get HOST_WHATSAPP)  (provedor Evolution Go; API key = EVOGO_GLOBAL_API_KEY em $ENVF)"; echo; } >> "$RESUMO"
+  primeira_conta
+}
+
+criar_db() { # criar_db serviço banco
+  local c; c=$(container_de "$1")
+  docker exec "$c" psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$2'" | grep -q 1 \
+    && ok "banco $2 já existe" || executar "banco $2" docker exec "$c" psql -U postgres -c "CREATE DATABASE $2;"
+}
+
+primeira_conta() {
+  cabecalho "Passo 3 · Primeira conta e template"
+  [ "$DRY" = 1 ] && { info "(dry-run) criação da 1ª conta e template"; return; }
+  info "Abra ${branco}https://$(env_get HOST_CRM)${reset} e crie a conta do administrador (cadastro aberto só agora)."
+  local n=0
+  until [ "${n:-0}" -ge 1 ]; do
+    echo -en "  ${amarelo}Depois de criar a conta, aperte Enter${reset}"; read -r
+    n=$(printf 'puts User.count\n' > "$BASE/.u.rb"; rails_runner "$BASE/.u.rb" | tail -1); rm -f "$BASE/.u.rb"
+    [ "${n:-0}" -ge 1 ] 2>/dev/null || aviso "Ainda não encontrei nenhuma conta no CRM."
+  done
+  ok "conta criada"
+  aplicar_template
+  fechar_cadastro
+}
+
+aplicar_template() {
+  local D="$WIZ_DIR/crm/${CRM_ID:-$(env_get BRITTO_CRM)}" t wa ag
+  cabecalho "Template de nicho"
+  info "O template cria pipelines, etiquetas, campos, macros, a automação de opt-out e o funil de tráfego."
+  info "É idempotente: não apaga nem sobrescreve nada que já exista."
+  ls "$D/templates/"*.rb >/dev/null 2>&1 || { aviso "sem templates para este CRM"; return; }
+  echo; for t in "$D"/templates/*.rb; do echo -e "   ${verde}•${reset} $(basename "$t" .rb)"; done; echo
+  perguntar t "Template (ou 'nenhum')" "juridico"
+  [ "$t" = nenhum ] && return
+  [ -f "$D/templates/$t.rb" ] || morrer "template $t não encontrado"
+  perguntar wa "WhatsApp comercial com DDI (ex.: 5571999999999; Enter pula)" ""
+  perguntar ag "Links de agendamento (cal.com/..., separados por vírgula; Enter pula)" ""
+  rails_runner "$D/templates/$t.rb" "BRITTO_ORG_NAME=$(env_get ORG_NAME)" "BRITTO_WHATSAPP=$wa" "BRITTO_SCHEDULING_URLS=$ag" \
+    "BRITTO_DRY_RUN=$DRY" | tail -3
+}
+
+fechar_cadastro() {
+  local D="$WIZ_DIR/crm/${CRM_ID:-$(env_get BRITTO_CRM)}"
+  env_set ENABLE_ACCOUNT_SIGNUP false; env_set SIGNUP_ALLOW_RANGE 255.255.255.255/32
+  deploy_portainer evocrm "$D/stacks/evocrm.yaml" && ok "cadastro público fechado (só convites a partir de agora)"
+}
+
+## ------------------------------------------------------------- extras opcionais
+passo_mcp() {
+  local D="$WIZ_DIR/crm/${CRM_ID:-$(env_get BRITTO_CRM)}" host pass hash tok
+  cabecalho "Extra · Conector MCP (Claude, ChatGPT/Codex)"
+  perguntar host "Domínio do conector" "$(env_get HOST_MCP | grep -v exemplo || echo "mcp.$(env_get HOST_CRM | sed 's/^crm\.//')")"
+  env_set HOST_MCP "$host"; checar_dns "$host"
+  [ "$DRY" = 1 ] && { deploy_portainer evocrm_mcp "$D/stacks/evocrm-mcp.yaml"; return; }
+  printf 'u = User.where.not(type: %%w[AgentBot]).order(:created_at).first\nputs u&.access_token&.token\n' > "$BASE/.t.rb"
+  tok=$(rails_runner "$BASE/.t.rb" | tail -1); rm -f "$BASE/.t.rb"
+  [ ${#tok} -ge 16 ] || morrer "não consegui ler o token de acesso do administrador no CRM"
+  pass=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)
+  hash=$(PW="$pass" python3 -c 'import hashlib,os;s=os.urandom(16);print(s.hex()+":"+hashlib.scrypt(os.environ["PW"].encode(),salt=s,n=16384,r=8,p=1,dklen=64).hex())')
+  docker secret rm britto_mcp_crm_token britto_mcp_pass_scrypt >/dev/null 2>&1 || true
+  printf '%s' "$tok" | docker secret create britto_mcp_crm_token - >/dev/null && ok "segredo do token do CRM"
+  printf '%s' "$hash" | docker secret create britto_mcp_pass_scrypt - >/dev/null && ok "segredo da senha do conector"
+  volumes_de "$D/stacks/evocrm-mcp.yaml"
+  deploy_portainer evocrm_mcp "$D/stacks/evocrm-mcp.yaml"
+  { echo "Conector MCP: https://$host/mcp"; echo "  senha do conector: $pass"
+    echo "  Claude (web/desktop): Configurações > Conectores > Adicionar conector personalizado > https://$host/mcp"
+    echo "  Claude Code: claude mcp add --transport http --scope user crm https://$host/mcp"
+    echo "  Codex: em ~/.codex/config.toml: [mcp_servers.crm] url = \"https://$host/mcp\"  (login OAuth no 1º uso)"; echo; } >> "$RESUMO"
+  ok "conector instalado; senha e comandos em $RESUMO"
+}
+
+passo_docuseal() {
+  local D="$WIZ_DIR/crm/${CRM_ID:-$(env_get BRITTO_CRM)}" host
+  cabecalho "Extra · Assinatura eletrônica (DocuSeal)"
+  perguntar host "Domínio da assinatura" "$(env_get HOST_DOCUSEAL | grep -v exemplo || echo "assinatura.$(env_get HOST_CRM | sed 's/^crm\.//')")"
+  env_set HOST_DOCUSEAL "$host"; checar_dns "$host"
+  volumes_de "$D/stacks/docuseal.yaml"
+  deploy_portainer docuseal "$D/stacks/docuseal.yaml"
+  echo "DocuSeal: https://$host  (crie o admin no 1º acesso; webhook submission.completed → conector MCP /webhooks/docuseal)" >> "$RESUMO"
+}
+
+status() {
+  cabecalho "Status"
+  docker stack ls 2>/dev/null; echo
+  docker service ls --format '{{.Replicas}}\t{{.Name}}' 2>/dev/null | sort -k2; echo
+  local h
+  for h in HOST_PORTAINER HOST_CRM HOST_API_CRM HOST_WHATSAPP HOST_MCP HOST_DOCUSEAL; do
+    v=$(env_get "$h"); [ -n "$v" ] && [[ "$v" != *exemplo* ]] && echo -e "  $h  https://$v  $(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://$v/")"
+  done
+}
+
+final() {
+  cabecalho "Pronto!"
+  [ -f "$RESUMO" ] && cat "$RESUMO"
+  linha
+  info "Materiais passo a passo: $WIZ_DIR/docs (WhatsApp, Instagram, Facebook, Gmail, agentes, inatividade,"
+  info "jornadas com gatilho de pipeline, MCP no Claude Code e Codex, tokens do Meta e do Google)."
+  info "Guarde o $ENVF e o $RESUMO no cofre de senhas. Nunca cole em chat."
+  linha
+}
+
+## ------------------------------------------------------------------- principal
+IP=""
+case "${1:-}" in
+  status)   status ;;
+  resumo)   cat "$RESUMO" 2>/dev/null || aviso "sem resumo ainda" ;;
+  template) IP=$(ip_publico); aplicar_template ;;
+  fechar)   fechar_cadastro ;;
+  mcp)      IP=$(ip_publico); passo_mcp ;;
+  docuseal) IP=$(ip_publico); passo_docuseal ;;
+  ""|instalar)
+    preparar_servidor
+    passo_portainer
+    if stack_existe evocrm && [ "$DRY" != 1 ]; then ok "CRM já instalado (stack evocrm): pulando o passo 2."; CRM_ID=$(env_get BRITTO_CRM)
+    else passo_crm; fi
+    cabecalho "Extras"
+    confirmar "Instalar o conector MCP (Claude, ChatGPT/Codex)?" && passo_mcp
+    confirmar "Instalar a assinatura eletrônica (DocuSeal)?" && passo_docuseal
+    final ;;
+  *) sed -n '9,18p' "$0" ;;
+esac
